@@ -1,0 +1,231 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2761
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 <!doctype html>\
+<html lang="en">\
+<head>\
+  <meta charset="utf-8">\
+  <meta name="viewport" content="width=device-width, initial-scale=1">\
+  <title>Chaotic Cook-Off \'97 Episode 3</title>\
+  <script src="https://cdn.tailwindcss.com"></script>\
+  <style>\
+    body\{background:#F4C44E;color:#000\}\
+    .card\{box-shadow:8px 8px 0 rgba(0,0,0,.5)\}\
+  </style>\
+</head>\
+<body class="min-h-screen font-sans">\
+  <div class="max-w-5xl mx-auto px-4 py-6">\
+    <div class="flex items-center gap-3">\
+      <div class="w-14 h-14 rounded-full bg-black text-[#F4C44E] flex items-center justify-center font-extrabold text-xl">CO</div>\
+      <div>\
+        <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight uppercase">Chaotic Cook-Off</h1>\
+        <p class="uppercase font-black -mt-1">Between the Bread \'97 Episode 3</p>\
+      </div>\
+    </div>\
+\
+    <div id="gate" class="mt-6 p-4 bg-black/10 rounded-2xl border border-black/20">\
+      <h2 class="font-extrabold tracking-wide uppercase">Judge Check-In</h2>\
+      <p class="text-sm opacity-80">Type your name to start scoring.</p>\
+      <div class="mt-3 flex gap-3">\
+        <input id="judgeName" placeholder="Your Name" class="px-3 py-2 rounded-lg border border-black/30 bg-white flex-1">\
+        <button id="enterBtn" class="px-4 py-2 rounded-xl bg-black text-[#F4C44E] font-bold uppercase tracking-wide">Start</button>\
+      </div>\
+    </div>\
+\
+    <div id="who" class="hidden mt-4 text-sm"></div>\
+\
+    <div id="cards" class="mt-6 grid md:grid-cols-3 gap-5"></div>\
+\
+    <div id="submitBox" class="hidden mt-6 p-4 rounded-2xl border-4 border-black bg-[#FCE9AF] card">\
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">\
+        <div>\
+          <div class="font-extrabold uppercase">Your Grand Total: <span id="grandTotal">0</span></div>\
+          <div class="text-xs opacity-75">Scale 0\'9610 per criterion. Submit once you\'92ve tasted everything.</div>\
+        </div>\
+        <button id="submitBtn" class="px-5 py-3 rounded-2xl font-extrabold uppercase tracking-wide bg-black text-[#F4C44E]">Submit Final Scores</button>\
+      </div>\
+      <div id="submitMsg" class="mt-2 text-sm"></div>\
+    </div>\
+\
+    <div id="leaderWrap" class="mt-8 p-5 bg-black text-[#F4C44E] rounded-3xl border-4 border-black card">\
+      <h2 class="text-2xl font-extrabold uppercase">Leaderboard</h2>\
+      <p class="text-xs opacity-80">Auto-reveals winner when all judges finish.</p>\
+      <div id="race" class="mt-4 space-y-3"></div>\
+      <div id="leader" class="mt-4 grid sm:grid-cols-3 gap-4"></div>\
+      <div id="winner" class="mt-6 p-4 rounded-2xl border-4 border-black bg-[#F9DA85] text-black text-center hidden"></div>\
+    </div>\
+\
+    <div class="py-10 text-center opacity-70 text-xs">\'a9 Chaotic Cook-Off \'97 Episode 3. Score fair, eat more. 0 = nope, 10 = legendary.</div>\
+  </div>\
+\
+<script>\
+// ==== CONFIG ====\
+// Your deployed Apps Script Web App URL:\
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwWi-NH1p4FrnZv5tjKgh_fClXxZa-R8KfPQ9uCp3WKk1Kgih1DQM4zSq-eI87dTwltHA/exec";\
+\
+const CONTESTANTS = [\
+  \{ key: "Rahul", name: "Rahul", region: "Cuba", bio: "Cuban classics \'95 Veg + Non-veg" \},\
+  \{ key: "Aashna", name: "Aashna", region: "Turkey", bio: "Turkish delights \'95 Veg + Non-veg" \},\
+  \{ key: "Rishabh", name: "Rishabh", region: "Vietnam", bio: "Vietnamese vibes \'95 Veg + Non-veg" \},\
+];\
+\
+const CRITERIA = [\
+  \{ id: "tasteVeg", label: "Taste (Veg)" \},\
+  \{ id: "tasteNonVeg", label: "Taste (Non-Veg)" \},\
+  \{ id: "presentation", label: "Presentation" \},\
+  \{ id: "creativity", label: "Creativity / Authenticity" \},\
+  \{ id: "overall", label: "Overall Satisfaction" \},\
+];\
+\
+// ==== STATE ====\
+let judgeName = "";\
+const scores = \{\};\
+const totals = \{\};\
+CONTESTANTS.forEach(c => \{\
+  scores[c.key] = \{\};\
+  CRITERIA.forEach(cr => scores[c.key][cr.id] = 0);\
+  totals[c.key] = 0;\
+\});\
+\
+const clamp = v => Math.max(0, Math.min(10, Math.round(v)));\
+const sum = obj => Object.values(obj).reduce((a,b) => a + (Number.isFinite(b)?b:0), 0);\
+\
+// render cards\
+const cards = document.getElementById("cards");\
+function renderCards() \{\
+  cards.innerHTML = "";\
+  CONTESTANTS.forEach(c => \{\
+    const card = document.createElement("div");\
+    card.className = "rounded-3xl border-4 border-black bg-[#F9DA85] p-4 card";\
+    card.innerHTML = `\
+      <h3 class="text-xl font-extrabold uppercase">$\{c.name\}</h3>\
+      <p class="text-xs">$\{c.region\} \'95 $\{c.bio\}</p>\
+      <div class="mt-4 space-y-3">\
+        $\{CRITERIA.map(cr => `\
+          <div>\
+            <div class="text-xs font-black uppercase mb-1">$\{cr.label\}</div>\
+            <div class="flex items-center gap-3 w-full">\
+              <input type="range" min="0" max="10" value="$\{scores[c.key][cr.id]\}" data-c="$\{c.key\}" data-id="$\{cr.id\}" class="w-full slider">\
+              <input type="number" min="0" max="10" value="$\{scores[c.key][cr.id]\}" data-c="$\{c.key\}" data-id="$\{cr.id\}" class="w-16 border rounded px-2 py-1 text-center num">\
+            </div>\
+          </div>\
+        `).join("")\}\
+      </div>\
+      <div class="mt-3 font-extrabold uppercase">Total: <span id="t_$\{c.key\}">0</span></div>\
+    `;\
+    cards.appendChild(card);\
+  \});\
+\
+  cards.querySelectorAll(".slider, .num").forEach(inp => \{\
+    inp.addEventListener("input", e => \{\
+      const el = e.target;\
+      const ck = el.dataset.c;\
+      const id = el.dataset.id;\
+      const val = clamp(Number(el.value));\
+      scores[ck][id] = val;\
+      cards.querySelectorAll(`[data-c="$\{ck\}"][data-id="$\{id\}"]`).forEach(m => m.value = val);\
+      totals[ck] = sum(scores[ck]);\
+      document.getElementById(`t_$\{ck\}`).textContent = totals[ck];\
+      document.getElementById("grandTotal").textContent = Object.values(totals).reduce((a,b)=>a+b,0);\
+    \});\
+  \});\
+\}\
+\
+// name gate\
+document.getElementById("enterBtn").addEventListener("click", () => \{\
+  const v = (document.getElementById("judgeName").value || "").trim();\
+  if (!v) \{ alert("Type your name."); return; \}\
+  judgeName = v;\
+  document.getElementById("gate").classList.add("hidden");\
+  document.getElementById("who").classList.remove("hidden");\
+  document.getElementById("who").textContent = "Logged in as " + judgeName;\
+  document.getElementById("submitBox").classList.remove("hidden");\
+\});\
+\
+// submit\
+document.getElementById("submitBtn").addEventListener("click", async () => \{\
+  const payload = \{\
+    action: "submit",\
+    judgeName,\
+    scores,\
+    totalByContestant: totals,\
+    grandTotal: Object.values(totals).reduce((a,b)=>a+b,0),\
+    completedAt: new Date().toISOString()\
+  \};\
+  const btn = document.getElementById("submitBtn");\
+  const msg = document.getElementById("submitMsg");\
+  btn.disabled = true;\
+  try \{\
+    await fetch(SCRIPT_URL, \{\
+      method: "POST",\
+      mode: "no-cors",\
+      headers: \{ "Content-Type": "text/plain;charset=UTF-8" \},\
+      body: JSON.stringify(payload)\
+    \});\
+    msg.textContent = "Scores submitted! Check the Sheet \uc0\u8594  Scores tab.";\
+  \} catch (err) \{\
+    btn.disabled = false;\
+    msg.textContent = "Could not submit. Check your SCRIPT_URL or try again.";\
+  \}\
+\});\
+\
+// draw race bars + leaderboard\
+function drawRaceAndBoard(data) \{\
+  const totals = data?.totals || \{\};\
+  // race bars\
+  const race = document.getElementById("race");\
+  const order = ["Rahul","Aashna","Rishabh"];\
+  const max = Math.max(1, ...order.map(k => Number(totals[k]||0)));\
+  race.innerHTML = order.map(k => \{\
+    const val = Number(totals[k]||0);\
+    const pct = Math.round((val/max)*100);\
+    return `\
+      <div class="w-full">\
+        <div class="flex justify-between text-xs font-bold"><span>$\{k\}</span><span>$\{val\}</span></div>\
+        <div class="w-full h-5 bg-[#FCE9AF] border-2 border-black rounded-full overflow-hidden">\
+          <div class="h-full bg-black text-[#F4C44E]" style="width:$\{pct\}%;transition:width 600ms ease"></div>\
+        </div>\
+      </div>`;\
+  \}).join("");\
+\
+  // leaderboard boxes\
+  const leader = document.getElementById("leader");\
+  leader.innerHTML = order.map(k => `\
+    <div class="rounded-2xl bg-[#F4C44E] text-black p-4 border-4 border-black text-center">\
+      <div class="font-extrabold uppercase">$\{k\}</div>\
+      <div class="text-3xl font-black mt-1">$\{Number(totals[k]||0)\}</div>\
+    </div>`).join("");\
+\
+  if (data?.reveal) \{\
+    const entries = Object.entries(totals);\
+    if (entries.length) \{\
+      const maxE = entries.reduce((a,c)=> c[1]>a[1]?c:a, entries[0]);\
+      const w = document.getElementById("winner");\
+      w.classList.remove("hidden");\
+      w.innerHTML = `<div class="text-xl font-extrabold uppercase">Winner</div>\
+                     <div class="text-3xl font-black mt-1">\uc0\u10024 \u10024 \u10024  $\{maxE[0]\} \'97 $\{maxE[1]\} \u10024 \u10024 \u10024 </div>`;\
+    \}\
+  \}\
+\}\
+\
+// polling (auto-refresh)\
+async function poll() \{\
+  try \{\
+    const res = await fetch(SCRIPT_URL + "?action=leaderboard");\
+    const data = await res.json();\
+    drawRaceAndBoard(data);\
+  \} catch (e) \{ /* ignore */ \}\
+\}\
+setInterval(poll, 4000);\
+poll();\
+\
+// boot\
+renderCards();\
+</script>\
+</body>\
+</html>\
+}
