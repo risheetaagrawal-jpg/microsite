@@ -92,11 +92,8 @@
     <div class="flex items-end justify-between gap-2">
       <div>
         <h2 class="text-2xl font-extrabold uppercase">Leaderboard</h2>
-        <p class="text-xs opacity-80">Auto-refreshing. Winner reveals when all judges finish OR at 4:00 PM IST. <span id="updated"></span></p>
+        <p class="text-xs opacity-80">Auto-refreshing. Winner reveals when all judges finish or at 4:00 PM IST. <span id="updated"></span></p>
         <p class="text-xs opacity-80" id="scaleInfo"></p>
-      </div>
-      <div class="text-xs">
-        <button id="refreshBtn" class="px-3 py-2 rounded bg-[#F4C44E] text-black font-bold">Check Now</button>
       </div>
     </div>
 
@@ -126,8 +123,11 @@ const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwWi-NH1p4FrnZv5tjKg
 const START_UTC = "2025-08-31T07:00:00Z";
 const END_UTC   = "2025-08-31T10:30:00Z";
 
-// Display denominator: show out of 1500 as requested
-const DISPLAY_DENOM = 1500;
+// Real denominator: 5 criteria × 10 × 15 judges = 750 (per contestant)
+const CRITERIA_COUNT = 5;
+const MAX_PER_CRITERION = 10;
+const EXPECTED_JUDGES = 15;
+const DISPLAY_DENOM = CRITERIA_COUNT * MAX_PER_CRITERION * EXPECTED_JUDGES; // 750
 
 const CONTESTANTS = [
   { key:"Rahul", name:"Rahul", region:"Cuba", bio:"Cuban classics • Veg + Non-veg" },
@@ -135,7 +135,7 @@ const CONTESTANTS = [
   { key:"Rishabh", name:"Rishabh", region:"Vietnam", bio:"Vietnamese vibes • Veg + Non-veg" },
 ];
 
-// 5 criteria => max 50 per contestant per judge (kept as-is; we only scale display to /1500)
+// Criteria (5)
 const CRITERIA = [
   { id:"tasteVeg", label:"Taste (Veg)" },
   { id:"tasteNonVeg", label:"Taste (Non-Veg)" },
@@ -144,7 +144,7 @@ const CRITERIA = [
   { id:"overall", label:"Overall Satisfaction" },
 ];
 
-document.getElementById("scaleInfo").textContent = "Totals shown out of 1,500.";
+document.getElementById("scaleInfo").textContent = `Totals shown out of ${DISPLAY_DENOM}.`;
 
 // ===== STATE =====
 let judgeName = "";
@@ -319,10 +319,10 @@ function drawJudges(judges){
     </tr></thead>
     <tbody>
       ${judges.map(j=>{
-        const jt = j.totals || {}
-        const pick = Object.entries(jt).reduce((a,c)=> c[1]>a[1]?c:a, ["", -1])[0] || ""
-        const time = (j.ts||"").toString()
-        const tt = time.includes("T") ? time.split("T")[1].slice(0,8) : time
+        const jt = j.totals || {};
+        const pick = Object.entries(jt).reduce((a,c)=> c[1]>a[1]?c:a, ["", -1])[0] || "";
+        const time = (j.ts||"").toString();
+        const tt = time.includes("T") ? time.split("T")[1].slice(0,8) : time;
         return `<tr class="border-t border-black/10">
           <td class="pr-4 py-1 font-bold">${j.name||"—"}</td>
           <td class="pr-4 py-1">${Number(jt.Rahul||0)}</td>
@@ -331,7 +331,7 @@ function drawJudges(judges){
           <td class="pr-4 py-1 font-bold">${Number(j.grandTotal||0)}</td>
           <td class="pr-4 py-1">${pick}</td>
           <td class="pr-4 py-1 opacity-70">${tt}</td>
-        </tr>`
+        </tr>`;
       }).join("")}
     </tbody>`;
 }
@@ -356,7 +356,6 @@ async function refresh(){
     }
   }catch(e){/* ignore */ }
 }
-document.getElementById("refreshBtn").addEventListener("click", refresh);
 setInterval(refresh, 4000);
 refresh();
 </script>
