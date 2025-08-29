@@ -1,290 +1,269 @@
-import React, { useMemo, useState, useEffect, useRef } from "react";
-
-/**
- * Chaotic Cook‑Off — Episode 3: Between the Bread
- * Public microsite. Judges type their NAME to score.
- * Retro poster styling, mobile‑first, colorful, interactive.
- *
- * Google Sheet backend via Google Apps Script (see snippet at bottom).
- * Sheet: Scores (Timestamp | Judge Name | Scores JSON | Totals JSON | Grand Total)
- */
-
-// ====== CONFIG ======
-// Paste your Google Apps Script Web App URL here (same URL for send + leaderboard fetch)
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwWi-NH1p4FrnZv5tjKgh_fClXxZa-R8KfPQ9uCp3WKk1Kgih1DQM4zSq-eI87dTwltHA/exec";
-const SEND_SCORES_URL = SCRIPT_URL;
-const LEADERBOARD_URL = SCRIPT_URL;
-
-// Host detection: if NOT in ChatGPT preview, auto‑refresh by default
-const IS_PREVIEW = typeof window !== 'undefined' && /chatgpt|openai/i.test(window.location.host);
-const REFRESH_MS = 4000;
-
-const POSTER_IMAGE = ""; // optional hero image URL
-
-const CONTESTANTS = [
-  { key: "Rahul", name: "Rahul", region: "Cuba", bio: "Cuban classics • Veg + Non‑veg", img: "" },
-  { key: "Aashna", name: "Aashna", region: "Turkey", bio: "Turkish delights • Veg + Non‑veg", img: "" },
-  { key: "Rishabh", name: "Rishabh", region: "Vietnam", bio: "Vietnamese vibes • Veg + Non‑veg", img: "" },
-] as const;
-
-const CRITERIA = [
-  { id: "tasteVeg", label: "Taste (Veg)" },
-  { id: "tasteNonVeg", label: "Taste (Non‑Veg)" },
-  { id: "presentation", label: "Presentation" },
-  { id: "creativity", label: "Creativity / Authenticity" },
-  { id: "overall", label: "Overall Satisfaction" },
-] as const;
-
-function clampScore(v: number) { return Math.max(0, Math.min(10, Math.round(v))); }
-function totalFor(scoresObj: Record<string, number>) { return Object.values(scoresObj).reduce((a,b)=>a+(Number.isFinite(b)?b:0), 0); }
-const blankContestantScores = () => CRITERIA.reduce((acc, c) => { acc[c.id] = 0; return acc; }, {} as Record<string, number>);
-
-// ===== Race Ticker =====
-function RaceTicker({ totals }: { totals: Record<string, number> }) {
-  const order = ["Rahul","Aashna","Rishabh"];
-  const max = Math.max(1, ...order.map(k => Number(totals[k] || 0)));
-  return (
-    <div className="mt-6 p-4 rounded-2xl border-4 border-black bg-[#F9DA85] text-black">
-      <div className="text-sm font-extrabold uppercase mb-2">Live Race</div>
-      <div className="space-y-3">
-        {order.map(k => {
-          const val = Number(totals[k] || 0);
-          const pct = Math.max(0, Math.min(100, Math.round((val / max) * 100)));
-          return (
-            <div key={k} className="w-full">
-              <div className="flex justify-between text-xs font-bold"><span>{k}</span><span>{val}</span></div>
-              <div className="w-full h-5 bg-[#FCE9AF] border-2 border-black rounded-full overflow-hidden">
-                <div className="h-full bg-black text-[#F4C44E] text-right pr-2 font-bold" style={{ width: pct + "%", transition: "width 600ms ease" }}>
-                  {/* bar */}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function TickerFeed({ feed }: { feed: Array<{ name:string, delta:number, total:number, at:string }>}) {
-  if (!feed.length) return null;
-  return (
-    <div className="mt-3 p-3 rounded-xl border-2 border-dashed border-black bg-[#FCE9AF] text-xs">
-      <div className="font-bold uppercase mb-1">Scoring Ticker</div>
-      <ul className="list-disc pl-5 space-y-1">
-        {feed.map((f, i) => (
-          <li key={i}><span className="font-bold">{f.name}</span> +{f.delta} → {f.total} <span className="opacity-60">({f.at})</span></li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-export default function CookOffMicrosite() {
-  const [judgeName, setJudgeName] = useState("");
-  const [isAuthed, setIsAuthed] = useState(false);
-  const [scores, setScores] = useState<Record<string, Record<string, number>>>(() => CONTESTANTS.reduce((acc, c) => { acc[c.key] = blankContestantScores(); return acc; }, {} as Record<string, Record<string, number>>));
-  const [submitted, setSubmitted] = useState(false);
-  const [submitMsg, setSubmitMsg] = useState("");
-  const [reveal, setReveal] = useState(false);
-  const [leaderboard, setLeaderboard] = useState<{ totals: Record<string, number>, judgeCount: number }>({ totals: {}, judgeCount: 0 });
-  const [live, setLive] = useState(false); // toggle auto‑refresh in preview
-  const prevTotalsRef = useRef<Record<string, number>>({ Rahul:0, Aashna:0, Rishabh:0 });
-  const [feed, setFeed] = useState<Array<{ name:string, delta:number, total:number, at:string}>>([]);
-
-  const totals = useMemo(() => { const t: Record<string, number> = {}; for (const c of CONTESTANTS) t[c.key] = totalFor(scores[c.key] || {}); return t; }, [scores]);
-  const grandTotal = useMemo(() => Object.values(totals).reduce((a,b)=>a+b,0), [totals]);
-
-  const handleAuth = () => { if (!judgeName.trim()) return alert("Type your name."); setIsAuthed(true); };
-
-  async function submitAll() {
-    try {
-      const payload = { judgeName: judgeName.trim(), scores, totalByContestant: totals, grandTotal, completedAt: new Date().toISOString() };
-      await fetch(SEND_SCORES_URL, {
-        method: "POST",
-        mode: "no-cors", // avoid CORS checks in preview
-        headers: { "Content-Type": "text/plain;charset=UTF-8" },
-        body: JSON.stringify({ action: "submit", ...payload })
-      });
-      setSubmitMsg("Scores submitted! Check the Sheet → Scores tab.");
-      setSubmitted(true);
-    } catch (e:any) { setSubmitMsg(e?.message || "Error submitting."); }
-  }
-
-  async function fetchLeaderboard() {
-    try {
-      const res = await fetch(LEADERBOARD_URL+"?action=leaderboard");
-      const data = await res.json();
-      if (data?.reveal) setReveal(true);
-      if (data?.totals) {
-        setLeaderboard({ totals: data.totals, judgeCount: data.judgeCount||0 });
-        // compute ticker deltas
-        const prev = prevTotalsRef.current || { Rahul:0, Aashna:0, Rishabh:0 };
-        ["Rahul","Aashna","Rishabh"].forEach(name => {
-          const newV = Number((data.totals && data.totals[name]) || 0);
-          const oldV = Number((prev && prev[name]) || 0);
-          const delta = newV - oldV;
-          if (delta > 0) {
-            const at = new Date().toLocaleTimeString();
-            setFeed(curr => [{ name, delta, total: newV, at }, ...curr].slice(0, 10));
-          }
-        });
-        prevTotalsRef.current = { ...(data.totals || {}) } as Record<string, number>;
-      }
-    } catch (e) { console.warn("Leaderboard fetch failed", e); }
-  }
-  // (Preview-friendly) No auto fetch on load to avoid repeated network prompts in canvas.
-// useEffect(() => { fetchLeaderboard(); }, []);
-  // Auto‑start live mode when hosted (no preview popups)
-useEffect(() => { if (!IS_PREVIEW) { setLive(true); fetchLeaderboard(); } }, []);
-useEffect(() => { if (live) { const id = setInterval(fetchLeaderboard, REFRESH_MS); return () => clearInterval(id); } }, [live]);
-
-  const ScoreInput = ({ value, onChange }: { value: number; onChange:(v:number)=>void }) => (
-    <div className="flex items-center gap-3 w-full">
-      <input type="range" min={0} max={10} value={value} onChange={e=>onChange(clampScore(Number(e.target.value)))} className="w-full" />
-      <input type="number" min={0} max={10} value={value} onChange={e=>onChange(clampScore(Number(e.target.value)))} className="w-16 border rounded px-2 py-1 text-center" />
-    </div>
-  );
-
-  function setScore(contestantKey:string, criterionId:string, v:number) { setScores(prev => ({ ...prev, [contestantKey]: { ...prev[contestantKey], [criterionId]: clampScore(v) } })); }
-
-  const retroBg = "bg-[#F4C44E]", retroInk = "text-black";
-
-  return (
-    <div className={`min-h-screen ${retroBg} ${retroInk} font-sans`}>
-      <div className="max-w-5xl mx-auto px-4 py-6">
-        <h1 className="text-3xl font-extrabold uppercase">Chaotic Cook‑Off</h1>
-        <p className="uppercase font-black -mt-1">Between the Bread — Episode 3</p>
-
-        {/* Judge Gate (Name only) */}
-        {!isAuthed ? (
-          <div className="mt-6 p-4 bg-black/10 rounded-2xl">
-            <h2 className="font-extrabold">Judge Check‑In</h2>
-            <input placeholder="Your Name" value={judgeName} onChange={e=>setJudgeName(e.target.value)} className="px-3 py-2 rounded bg_white bg-white" />
-            <button onClick={handleAuth} className="px-4 py-2 mt-2 rounded bg-black text-[#F4C44E] font-bold">Start Scoring</button>
-          </div>
-        ) : (
-          <div className="mt-6">Logged in as {judgeName}</div>
-        )}
-
-        {/* Contestant Cards */}
-        <div className="mt-6 grid md:grid-cols-3 gap-5">
-          {CONTESTANTS.map(c => (
-            <div key={c.key} className="rounded-3xl border-4 border-black bg-[#F9DA85] p-4">
-              <h3 className="text-xl font-extrabold uppercase">{c.name}</h3>
-              <p className="text-xs">{c.region} • {c.bio}</p>
-              <div className="mt-4 space-y-3">
-                {CRITERIA.map(cr => (
-                  <div key={cr.id}>
-                    <div className="text-xs font-black uppercase mb-1">{cr.label}</div>
-                    <ScoreInput value={(scores[c.key] && scores[c.key][cr.id] !== undefined) ? scores[c.key][cr.id] : 0} onChange={v=>setScore(c.key, cr.id, v)} />
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3 font-extrabold">Total: {totals[c.key]}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* Submit */}
-        <div className="mt-6 p-4 border-4 border-black bg-[#FCE9AF]">
-          <div>Your Grand Total: {grandTotal}</div>
-          <button disabled={!isAuthed||submitted} onClick={submitAll} className="px-5 py-3 mt-2 rounded bg-black text-[#F4C44E] font-bold">{submitted?"Submitted":"Submit Final Scores"}</button>
-          {submitMsg && <div className="mt-2 text-sm">{submitMsg}</div>}
-        </div>
-
-        {/* Results controls */}
-        <div className="mt-4 p-3 bg-black/10 rounded-xl border border-black/20">
-          <div className="text-xs mb-2 uppercase font-bold">Results</div>
-          <div className="flex gap-2 flex-wrap">
-            <button onClick={fetchLeaderboard} className="px-3 py-2 rounded bg-black text-[#F4C44E] font-bold text-xs">Check Leaderboard</button>
-            <button onClick={()=>setLive(v=>!v)} className="px-3 py-2 rounded bg-black text-[#F4C44E] font-bold text-xs">{live?"Stop Auto‑Refresh":"Enable Auto‑Refresh"}</button>
-          </div>
-          <div className="text-xs mt-2 opacity-70">
-            Leaderboard is always visible; <span className="font-bold">Winner</span> reveals once all judges finish. {IS_PREVIEW ? "(Auto-refresh is off until you enable it here.)" : "(Auto-refresh is ON by default on hosted site.)"}
-          </div>
-        </div>
-
-        {/* Live Race + Ticker */}
-        <RaceTicker totals={leaderboard.totals && Object.keys(leaderboard.totals).length ? leaderboard.totals : prevTotalsRef.current} />
-        <TickerFeed feed={feed} />
-
-        {/* Leaderboard */}
-        <div className="mt-6 p-5 bg-black text-[#F4C44E] rounded-3xl border-4 border-black">
-          <h2 className="text-2xl font-extrabold uppercase">Leaderboard</h2>
-          <p className="text-xs">Judges: {leaderboard.judgeCount} {!reveal && "• in progress"}</p>
-          <div className="mt-4 grid sm:grid-cols-3 gap-4">
-            {CONTESTANTS.map(c => (
-              <div key={c.key} className="rounded-2xl bg-[#F4C44E] text-black p-4 border-4 border-black">
-                <div className="font-extrabold uppercase">{c.name}</div>
-                <div className="text-3xl font-black mt-1">{(leaderboard.totals && leaderboard.totals[c.key] !== undefined) ? leaderboard.totals[c.key] : 0}</div>
-              </div>
-            ))}
-          </div>
-          {reveal ? (
-            <WinnerBanner totals={leaderboard.totals} />
-          ) : (
-            <div className="text-xs mt-2 opacity-80">Winner reveals once all judges finish.</div>
-          )}
-        </div>
-
-        <div className="py-10 text-center opacity-70 text-xs">© Chaotic Cook‑Off — Episode 3. Score fair, eat more. 0 = nope, 10 = legendary.</div>
-      </div>
-    </div>
-  );
-}
-
-function WinnerBanner({ totals }: { totals: Record<string, number> }) {
-  const entries = Object.entries(totals || {});
-  if (!entries.length) return null;
-  const max = entries.reduce((acc, cur)=> cur[1] > acc[1] ? cur : acc, entries[0]);
-  const [name, score] = max;
-  return <div className="mt-6 p-4 border-4 border-black bg-[#F9DA85] text-black text-center"><div className="text-xl font-extrabold">Winner</div><div className="text-3xl font-black mt-1">✨✨✨ {name} — {score} ✨✨✨</div></div>;
-}
-
-/**
- * ====== GOOGLE APPS SCRIPT SNIPPET (NO JUDGE ID) ======
- * // Replace SHEET_ID and EXPECTED with your numbers.
- * const SHEET_ID = 'SHEET_ID';
- * const SCORES_SHEET = 'Scores';
- * const EXPECTED = 20; // number of judges to wait for
- *
- * function doPost(e) {
- *   const ss = SpreadsheetApp.openById(SHEET_ID);
- *   const sheet = ss.getSheetByName(SCORES_SHEET);
- *   const data = JSON.parse(e.postData.contents);
- *   if (data.action === 'submit') {
- *     sheet.appendRow([
- *       new Date(),
- *       data.judgeName,
- *       JSON.stringify(data.scores),
- *       JSON.stringify(data.totalByContestant),
- *       data.grandTotal
- *     ]);
- *     return ContentService
- *       .createTextOutput(JSON.stringify({ status: 'ok' }))
- *       .setMimeType(ContentService.MimeType.JSON);
- *   }
- *   return ContentService
- *     .createTextOutput(JSON.stringify({ status: 'noop' }))
- *     .setMimeType(ContentService.MimeType.JSON);
- * }
- *
- * function doGet(e) {
- *   const ss = SpreadsheetApp.openById(SHEET_ID);
- *   const sheet = ss.getSheetByName(SCORES_SHEET);
- *   const rows = sheet.getDataRange().getValues();
- *   const judgeCount = Math.max(rows.length - 1, 0);
- *   const totals = { Rahul: 0, Aashna: 0, Rishabh: 0 };
- *   for (let i = 1; i < rows.length; i++) {
- *     try {
- *       const rowTotals = JSON.parse(rows[i][3]); // TotalsJSON
- *       Object.keys(totals).forEach(k => totals[k] += Number(rowTotals[k] || 0));
- *     } catch (_) {}
- *   }
- *   const reveal = judgeCount >= EXPECTED;
- *   return ContentService
- *     .createTextOutput(JSON.stringify({ reveal, totals, judgeCount }))
- *     .setMimeType(ContentService.MimeType.JSON);
- * }
- */
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+<html>
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta http-equiv="Content-Style-Type" content="text/css">
+  <title></title>
+  <meta name="Generator" content="Cocoa HTML Writer">
+  <meta name="CocoaVersion" content="2487.6">
+  <style type="text/css">
+    p.p1 {margin: 0.0px 0.0px 0.0px 0.0px; font: 12.0px Helvetica}
+    p.p2 {margin: 0.0px 0.0px 0.0px 0.0px; font: 12.0px Helvetica; min-height: 14.0px}
+  </style>
+</head>
+<body>
+<p class="p1">&lt;!doctype html&gt;</p>
+<p class="p1">&lt;html lang="en"&gt;</p>
+<p class="p1">&lt;head&gt;</p>
+<p class="p1">&lt;meta charset="utf-8"&gt;</p>
+<p class="p1">&lt;meta name="viewport" content="width=device-width,initial-scale=1"&gt;</p>
+<p class="p1">&lt;title&gt;Chaotic Cook-Off — Episode 3&lt;/title&gt;</p>
+<p class="p1">&lt;script src="https://cdn.tailwindcss.com"&gt;&lt;/script&gt;</p>
+<p class="p1">&lt;style&gt;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>body{background:#F4C44E;color:#000;font-family:ui-sans-serif,system-ui,Segoe UI,Roboto}</p>
+<p class="p1"><span class="Apple-converted-space">  </span>.card{box-shadow:8px 8px 0 rgba(0,0,0,.5)}</p>
+<p class="p1">&lt;/style&gt;</p>
+<p class="p1">&lt;/head&gt;</p>
+<p class="p1">&lt;body class="min-h-screen"&gt;</p>
+<p class="p1">&lt;div class="max-w-5xl mx-auto px-4 py-6"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;div class="flex items-center gap-3"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;div class="w-14 h-14 rounded-full bg-black text-[#F4C44E] flex items-center justify-center font-extrabold text-xl"&gt;CO&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight uppercase"&gt;Chaotic Cook-Off&lt;/h1&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;p class="uppercase font-black -mt-1"&gt;Between the Bread — Episode 3&lt;/p&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;/div&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;!-- Name gate --&gt;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;div id="gate" class="mt-6 p-4 bg-black/10 rounded-2xl border border-black/20"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;h2 class="font-extrabold tracking-wide uppercase"&gt;Judge Check-In&lt;/h2&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;p class="text-sm opacity-80"&gt;Type your name to start scoring.&lt;/p&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;div class="mt-3 flex gap-3"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;input id="judgeName" placeholder="Your Name" class="px-3 py-2 rounded-lg border border-black/30 bg-white flex-1"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;button id="enterBtn" class="px-4 py-2 rounded-xl bg-black text-[#F4C44E] font-bold uppercase tracking-wide"&gt;Start&lt;/button&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;div id="nameMsg" class="text-xs text-red-700 mt-2"&gt;&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;/div&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;div id="who" class="hidden mt-4 text-sm"&gt;&lt;/div&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;!-- Scoring cards (hidden until name ok) --&gt;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;div id="cards" class="hidden mt-6 grid md:grid-cols-3 gap-5"&gt;&lt;/div&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;!-- Submit --&gt;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;div id="submitBox" class="hidden mt-6 p-4 rounded-2xl border-4 border-black bg-[#FCE9AF] card"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 w-full"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">        </span>&lt;div class="font-extrabold uppercase"&gt;Your Grand Total: &lt;span id="grandTotal"&gt;0&lt;/span&gt;&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">        </span>&lt;div class="text-xs opacity-75"&gt;Scale 0–10 per criterion. Submit once you’ve tasted everything.&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;button id="submitBtn" class="px-5 py-3 rounded-2xl font-extrabold uppercase tracking-wide bg-black text-[#F4C44E]"&gt;Submit Final Scores&lt;/button&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;div id="submitMsg" class="mt-2 text-sm"&gt;&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;/div&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;!-- Leaderboard --&gt;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;div id="leaderWrap" class="mt-8 p-5 bg-black text-[#F4C44E] rounded-3xl border-4 border-black card"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;h2 class="text-2xl font-extrabold uppercase"&gt;Leaderboard&lt;/h2&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;p class="text-xs opacity-80"&gt;Auto-refreshing. Winner reveals when all judges finish. &lt;span id="updated"&gt;&lt;/span&gt;&lt;/p&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;!-- Live race bars --&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;div id="race" class="mt-4 space-y-3"&gt;&lt;/div&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;!-- Summary cards --&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;div id="leader" class="mt-4 grid sm:grid-cols-3 gap-4"&gt;&lt;/div&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;!-- Judges table --&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;div id="judgesBox" class="hidden mt-6 p-4 bg-[#FCE9AF] text-black rounded-2xl border-4 border-black overflow-x-auto"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;div class="text-sm font-extrabold uppercase mb-2"&gt;Judges&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;table class="min-w-full text-xs" id="judges"&gt;&lt;/table&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;/div&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;div id="winner" class="mt-6 p-4 rounded-2xl border-4 border-black bg-[#F9DA85] text-black text-center hidden"&gt;&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;/div&gt;</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">  </span>&lt;div class="py-10 text-center opacity-70 text-xs"&gt;© Chaotic Cook-Off — Episode 3. Score fair, eat more. 0 = nope, 10 = legendary.&lt;/div&gt;</p>
+<p class="p1">&lt;/div&gt;</p>
+<p class="p2"><br></p>
+<p class="p1">&lt;script&gt;</p>
+<p class="p1">// ===== CONFIG =====</p>
+<p class="p1">const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwWi-NH1p4FrnZv5tjKgh_fClXxZa-R8KfPQ9uCp3WKk1Kgih1DQM4zSq-eI87dTwltHA/exec";</p>
+<p class="p2"><br></p>
+<p class="p1">const CONTESTANTS = [</p>
+<p class="p1"><span class="Apple-converted-space">  </span>{ key:"Rahul", name:"Rahul", region:"Cuba", bio:"Cuban classics • Veg + Non-veg" },</p>
+<p class="p1"><span class="Apple-converted-space">  </span>{ key:"Aashna", name:"Aashna", region:"Turkey", bio:"Turkish delights • Veg + Non-veg" },</p>
+<p class="p1"><span class="Apple-converted-space">  </span>{ key:"Rishabh", name:"Rishabh", region:"Vietnam", bio:"Vietnamese vibes • Veg + Non-veg" },</p>
+<p class="p1">];</p>
+<p class="p1">const CRITERIA = [</p>
+<p class="p1"><span class="Apple-converted-space">  </span>{ id:"tasteVeg", label:"Taste (Veg)" },</p>
+<p class="p1"><span class="Apple-converted-space">  </span>{ id:"tasteNonVeg", label:"Taste (Non-Veg)" },</p>
+<p class="p1"><span class="Apple-converted-space">  </span>{ id:"presentation", label:"Presentation" },</p>
+<p class="p1"><span class="Apple-converted-space">  </span>{ id:"creativity", label:"Creativity / Authenticity" },</p>
+<p class="p1"><span class="Apple-converted-space">  </span>{ id:"overall", label:"Overall Satisfaction" },</p>
+<p class="p1">];</p>
+<p class="p2"><br></p>
+<p class="p1">// ===== STATE =====</p>
+<p class="p1">let judgeName = "";</p>
+<p class="p1">const scores = {}; const totals = {};</p>
+<p class="p1">CONTESTANTS.forEach(c =&gt; { scores[c.key] = {}; CRITERIA.forEach(cr =&gt; scores[c.key][cr.id]=0); totals[c.key]=0; });</p>
+<p class="p2"><br></p>
+<p class="p1">const clamp = v =&gt; Math.max(0, Math.min(10, Math.round(v)));</p>
+<p class="p1">const sum = obj =&gt; Object.values(obj).reduce((a,b)=&gt;a+(Number.isFinite(b)?b:0),0);</p>
+<p class="p2"><br></p>
+<p class="p1">// ===== UI =====</p>
+<p class="p1">const cardsDiv = document.getElementById("cards");</p>
+<p class="p1">function renderCards() {</p>
+<p class="p1"><span class="Apple-converted-space">  </span>cardsDiv.innerHTML = "";</p>
+<p class="p1"><span class="Apple-converted-space">  </span>CONTESTANTS.forEach(c =&gt; {</p>
+<p class="p1"><span class="Apple-converted-space">    </span>const wrap = document.createElement("div");</p>
+<p class="p1"><span class="Apple-converted-space">    </span>wrap.className = "rounded-3xl border-4 border-black bg-[#F9DA85] p-4";</p>
+<p class="p1"><span class="Apple-converted-space">    </span>wrap.innerHTML = `</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;h3 class="text-xl font-extrabold uppercase"&gt;${c.name}&lt;/h3&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;p class="text-xs"&gt;${c.region} • ${c.bio}&lt;/p&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;div class="mt-4 space-y-3"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">        </span>${CRITERIA.map(cr =&gt; `</p>
+<p class="p1"><span class="Apple-converted-space">          </span>&lt;div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">            </span>&lt;div class="text-xs font-black uppercase mb-1"&gt;${cr.label}&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">            </span>&lt;div class="flex items-center gap-3 w-full"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">              </span>&lt;input type="range" min="0" max="10" value="${scores[c.key][cr.id]}" data-c="${c.key}" data-id="${cr.id}" class="w-full slider"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">              </span>&lt;input type="number" min="0" max="10" value="${scores[c.key][cr.id]}" data-c="${c.key}" data-id="${cr.id}" class="w-16 border rounded px-2 py-1 text-center num"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">            </span>&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">          </span>&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">        </span>`).join("")}</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;div class="mt-3 font-extrabold uppercase"&gt;Total: &lt;span id="t_${c.key}"&gt;0&lt;/span&gt;&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>`;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>cardsDiv.appendChild(wrap);</p>
+<p class="p1"><span class="Apple-converted-space">  </span>});</p>
+<p class="p2"><br></p>
+<p class="p1"><span class="Apple-converted-space">  </span>cardsDiv.querySelectorAll(".slider,.num").forEach(inp=&gt;{</p>
+<p class="p1"><span class="Apple-converted-space">    </span>inp.addEventListener("input", e=&gt;{</p>
+<p class="p1"><span class="Apple-converted-space">      </span>const el=e.target, ck=el.dataset.c, id=el.dataset.id, val=clamp(Number(el.value));</p>
+<p class="p1"><span class="Apple-converted-space">      </span>scores[ck][id]=val;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>cardsDiv.querySelectorAll(`[data-c="${ck}"][data-id="${id}"]`).forEach(m=&gt;m.value=val);</p>
+<p class="p1"><span class="Apple-converted-space">      </span>totals[ck]=sum(scores[ck]);</p>
+<p class="p1"><span class="Apple-converted-space">      </span>document.getElementById(`t_${ck}`).textContent = totals[ck];</p>
+<p class="p1"><span class="Apple-converted-space">      </span>document.getElementById("grandTotal").textContent = Object.values(totals).reduce((a,b)=&gt;a+b,0);</p>
+<p class="p1"><span class="Apple-converted-space">    </span>});</p>
+<p class="p1"><span class="Apple-converted-space">  </span>});</p>
+<p class="p1">}</p>
+<p class="p2"><br></p>
+<p class="p1">// ===== Name gate with duplicate check =====</p>
+<p class="p1">async function fetchLeaderboard(){</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const res = await fetch(SCRIPT_URL+"?action=leaderboard");</p>
+<p class="p1"><span class="Apple-converted-space">  </span>if (!res.ok) throw new Error("leaderboard fetch");</p>
+<p class="p1"><span class="Apple-converted-space">  </span>return res.json();</p>
+<p class="p1">}</p>
+<p class="p2"><br></p>
+<p class="p1">document.getElementById("enterBtn").addEventListener("click", async ()=&gt;{</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const v=(document.getElementById("judgeName").value||"").trim();</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const msg=document.getElementById("nameMsg");</p>
+<p class="p1"><span class="Apple-converted-space">  </span>msg.textContent="";</p>
+<p class="p1"><span class="Apple-converted-space">  </span>if (!v){ msg.textContent="Please type your name."; return; }</p>
+<p class="p1"><span class="Apple-converted-space">  </span>try {</p>
+<p class="p1"><span class="Apple-converted-space">    </span>const data = await fetchLeaderboard();</p>
+<p class="p1"><span class="Apple-converted-space">    </span>const used = (data.judges||[]).map(x=&gt;String(x.name||"").toLowerCase());</p>
+<p class="p1"><span class="Apple-converted-space">    </span>if (used.includes(v.toLowerCase())){ msg.textContent="This name is taken. Add a last initial or pick a new one."; return; }</p>
+<p class="p1"><span class="Apple-converted-space">  </span>} catch(_) {}</p>
+<p class="p1"><span class="Apple-converted-space">  </span>judgeName=v;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>document.getElementById("gate").classList.add("hidden");</p>
+<p class="p1"><span class="Apple-converted-space">  </span>document.getElementById("who").classList.remove("hidden");</p>
+<p class="p1"><span class="Apple-converted-space">  </span>document.getElementById("who").textContent="Logged in as "+judgeName;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>document.getElementById("submitBox").classList.remove("hidden");</p>
+<p class="p1"><span class="Apple-converted-space">  </span>cardsDiv.classList.remove("hidden");</p>
+<p class="p1"><span class="Apple-converted-space">  </span>renderCards();</p>
+<p class="p1">});</p>
+<p class="p2"><br></p>
+<p class="p1">// ===== Submit =====</p>
+<p class="p1">document.getElementById("submitBtn").addEventListener("click", async ()=&gt;{</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const payload={ action:"submit", judgeName, scores, totalByContestant:totals,</p>
+<p class="p1"><span class="Apple-converted-space">                  </span>grandTotal:Object.values(totals).reduce((a,b)=&gt;a+b,0),</p>
+<p class="p1"><span class="Apple-converted-space">                  </span>completedAt:new Date().toISOString() };</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const msg=document.getElementById("submitMsg");</p>
+<p class="p1"><span class="Apple-converted-space">  </span>try{</p>
+<p class="p1"><span class="Apple-converted-space">    </span>await fetch(SCRIPT_URL,{ method:"POST", mode:"no-cors",</p>
+<p class="p1"><span class="Apple-converted-space">      </span>headers:{ "Content-Type":"text/plain;charset=UTF-8" },</p>
+<p class="p1"><span class="Apple-converted-space">      </span>body:JSON.stringify(payload) });</p>
+<p class="p1"><span class="Apple-converted-space">    </span>msg.textContent="Scores submitted! Check the Sheet → Scores tab.";</p>
+<p class="p1"><span class="Apple-converted-space">  </span>}catch(e){ msg.textContent="Could not submit. Check your SCRIPT_URL or try again."; }</p>
+<p class="p1">});</p>
+<p class="p2"><br></p>
+<p class="p1">// ===== Leaderboard / Race / Judges =====</p>
+<p class="p1">function drawRace(totals){</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const order=["Rahul","Aashna","Rishabh"];</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const max=Math.max(1,...order.map(k=&gt;Number(totals[k]||0)));</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const race=document.getElementById("race");</p>
+<p class="p1"><span class="Apple-converted-space">  </span>race.innerHTML=order.map(k=&gt;{</p>
+<p class="p1"><span class="Apple-converted-space">    </span>const val=Number(totals[k]||0), pct=Math.round((val/max)*100);</p>
+<p class="p1"><span class="Apple-converted-space">    </span>return `&lt;div class="w-full"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;div class="flex justify-between text-xs font-bold"&gt;&lt;span&gt;${k}&lt;/span&gt;&lt;span&gt;${val}&lt;/span&gt;&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;div class="w-full h-4 bg-[#2B2B2B] rounded-full overflow-hidden border border-[#3d3d3d]"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">        </span>&lt;div class="h-full bg-[#F4C44E]" style="width:${pct}%;transition:width 600ms ease"&gt;&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;/div&gt;`;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>}).join("");</p>
+<p class="p1">}</p>
+<p class="p2"><br></p>
+<p class="p1">function drawCards(totals){</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const leader=document.getElementById("leader");</p>
+<p class="p1"><span class="Apple-converted-space">  </span>leader.innerHTML=CONTESTANTS.map(c=&gt;`</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;div class="rounded-2xl bg-[#F4C44E] text-black p-4 border-4 border-black text-center"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;div class="font-extrabold uppercase"&gt;${c.name}&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;div class="text-3xl font-black mt-1"&gt;${Number(totals[c.key]||0)}&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;/div&gt;`).join("");</p>
+<p class="p1">}</p>
+<p class="p2"><br></p>
+<p class="p1">function drawJudges(judges){</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const box=document.getElementById("judgesBox");</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const t=document.getElementById("judges");</p>
+<p class="p1"><span class="Apple-converted-space">  </span>if (!judges || !judges.length){ box.classList.add("hidden"); return; }</p>
+<p class="p1"><span class="Apple-converted-space">  </span>box.classList.remove("hidden");</p>
+<p class="p1"><span class="Apple-converted-space">  </span>t.innerHTML = `</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;thead&gt;&lt;tr class="text-left"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;th class="pr-4 py-1"&gt;Name&lt;/th&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;th class="pr-4 py-1"&gt;Rahul&lt;/th&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;th class="pr-4 py-1"&gt;Aashna&lt;/th&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;th class="pr-4 py-1"&gt;Rishabh&lt;/th&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;th class="pr-4 py-1"&gt;Total&lt;/th&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>&lt;th class="pr-4 py-1"&gt;Time&lt;/th&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;/tr&gt;&lt;/thead&gt;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;tbody&gt;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>${judges.map(j=&gt;`</p>
+<p class="p1"><span class="Apple-converted-space">        </span>&lt;tr class="border-t border-black/10"&gt;</p>
+<p class="p1"><span class="Apple-converted-space">          </span>&lt;td class="pr-4 py-1 font-bold"&gt;${j.name||"—"}&lt;/td&gt;</p>
+<p class="p1"><span class="Apple-converted-space">          </span>&lt;td class="pr-4 py-1"&gt;${Number(j.totals?.Rahul||0)}&lt;/td&gt;</p>
+<p class="p1"><span class="Apple-converted-space">          </span>&lt;td class="pr-4 py-1"&gt;${Number(j.totals?.Aashna||0)}&lt;/td&gt;</p>
+<p class="p1"><span class="Apple-converted-space">          </span>&lt;td class="pr-4 py-1"&gt;${Number(j.totals?.Rishabh||0)}&lt;/td&gt;</p>
+<p class="p1"><span class="Apple-converted-space">          </span>&lt;td class="pr-4 py-1 font-bold"&gt;${Number(j.grandTotal||0)}&lt;/td&gt;</p>
+<p class="p1"><span class="Apple-converted-space">          </span>&lt;td class="pr-4 py-1 opacity-70"&gt;${(j.ts||"").toString().split("T")[1]?.slice(0,8)||""}&lt;/td&gt;</p>
+<p class="p1"><span class="Apple-converted-space">        </span>&lt;/tr&gt;`).join("")}</p>
+<p class="p1"><span class="Apple-converted-space">    </span>&lt;/tbody&gt;`;</p>
+<p class="p1">}</p>
+<p class="p2"><br></p>
+<p class="p1">async function refresh(){</p>
+<p class="p1"><span class="Apple-converted-space">  </span>try{</p>
+<p class="p1"><span class="Apple-converted-space">    </span>const r=await fetch(SCRIPT_URL+"?action=leaderboard");</p>
+<p class="p1"><span class="Apple-converted-space">    </span>const data=await r.json();</p>
+<p class="p1"><span class="Apple-converted-space">    </span>document.getElementById("updated").textContent = "• updated " + new Date().toLocaleTimeString();</p>
+<p class="p1"><span class="Apple-converted-space">    </span>drawRace(data.totals||{});</p>
+<p class="p1"><span class="Apple-converted-space">    </span>drawCards(data.totals||{});</p>
+<p class="p1"><span class="Apple-converted-space">    </span>drawJudges(data.judges||[]);</p>
+<p class="p1"><span class="Apple-converted-space">    </span>if (data.reveal){</p>
+<p class="p1"><span class="Apple-converted-space">      </span>const entries=Object.entries(data.totals||{});</p>
+<p class="p1"><span class="Apple-converted-space">      </span>if(entries.length){</p>
+<p class="p1"><span class="Apple-converted-space">        </span>const max=entries.reduce((a,c)=&gt;c[1]&gt;a[1]?c:a,entries[0]);</p>
+<p class="p1"><span class="Apple-converted-space">        </span>const w=document.getElementById("winner");</p>
+<p class="p1"><span class="Apple-converted-space">        </span>w.classList.remove("hidden");</p>
+<p class="p1"><span class="Apple-converted-space">        </span>w.innerHTML=`&lt;div class="text-xl font-extrabold uppercase"&gt;Winner&lt;/div&gt;</p>
+<p class="p1"><span class="Apple-converted-space">                     </span>&lt;div class="text-3xl font-black mt-1"&gt;✨✨✨ ${max[0]} — ${max[1]} ✨✨✨&lt;/div&gt;`;</p>
+<p class="p1"><span class="Apple-converted-space">      </span>}</p>
+<p class="p1"><span class="Apple-converted-space">    </span>}</p>
+<p class="p1"><span class="Apple-converted-space">  </span>}catch(e){/* ignore */ }</p>
+<p class="p1">}</p>
+<p class="p1">setInterval(refresh, 4000);</p>
+<p class="p1">refresh();</p>
+<p class="p1">&lt;/script&gt;</p>
+<p class="p1">&lt;/body&gt;</p>
+<p class="p1">&lt;/html&gt;</p>
+</body>
+</html>
